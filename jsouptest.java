@@ -47,6 +47,21 @@ public class jsouptest {
             extracted(host +nextUri);
         }
     }
+    public static String doOcr4(String base64)throws TesseractException   {
+        String msg = HttpRequest.post("http://81.68.91.96:9999/api/tr-run/").form("img",base64).execute().body();
+        JSONObject data1 = JSONObject.parseObject(msg).getJSONObject("data");
+        JSONArray raw_out = data1.getJSONArray("raw_out");
+
+        String result = raw_out.getJSONArray(0).getString(1);
+        if (StrUtil.isEmpty(result)) {
+            for (int i = 0; i < 5; i++) {
+                return doOcr4(base64);
+            }
+            return "error";
+        }else
+            return result;
+
+    }
 
     private static  void body(String bodyUrl) throws IOException {
         String host="http://jwc.ys.sdufe.edu.cn/";
