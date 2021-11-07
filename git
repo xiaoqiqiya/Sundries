@@ -1,0 +1,185 @@
+#!/bin/sh
+set -e
+# Docker CE for Linux installation script
+#
+# See https://docs.docker.com/engine/install/ for the installation steps.
+#
+# This script is meant for quick & easy install via:
+#   $ curl -fsSL https://get.docker.com -o get-docker.sh
+#   $ sh get-docker.sh
+#
+# For test builds (ie. release candidates):
+#   $ curl -fsSL https://test.docker.com -o test-docker.sh
+#   $ sh test-docker.sh
+#
+# NOTE: Make sure to verify the contents of the script
+#       you downloaded matches the contents of install.sh
+#       located at https://github.com/docker/docker-install
+#       before executing.
+#
+# Git commit from https://github.com/docker/docker-install when
+# the script was uploaded (Should only be modified by upload job):
+SCRIPT_COMMIT_SHA="93d2499759296ac1f9c510605fef85052a2c32be"
+
+# strip "v" prefix if present
+VERSION="${VERSION#v}"
+
+# The channel to install from:
+#   * nightly
+#   * test
+#   * stable
+#   * edge (deprecated)
+DEFAULT_CHANNEL_VALUE="stable"
+if [ -z "$CHANNEL" ]; then
+	CHANNEL=$DEFAULT_CHANNEL_VALUE
+fi
+
+DEFAULT_DOWNLOAD_URL="https://download.docker.com"
+if [ -z "$DOWNLOAD_URL" ]; then
+	DOWNLOAD_URL=$DEFAULT_DOWNLOAD_URL
+fi
+
+DEFAULT_REPO_FILE="docker-ce.repo"
+if [ -z "$REPO_FILE" ]; then
+	REPO_FILE="$DEFAULT_REPO_FILE"
+fi
+
+mirror=''
+DRY_RUN=${DRY_RUN:-}
+while [ $# -gt 0 ]; do
+	case "$1" in
+		--mirror)
+			mirror="$2"
+			shift
+			;;
+		--dry-run)
+			DRY_RUN=1
+			;;
+		--*)
+			echo "Illegal option $1"
+			;;
+	esac
+	shift $(( $# > 0 ? 1 : 0 ))
+done
+
+case "$mirror" in
+	Aliyun)
+		DOWNLOAD_URL="https://mirrors.aliyun.com/docker-ce"
+		;;
+	AzureChinaCloud)
+		DOWNLOAD_URL="https://mirror.azure.cn/docker-ce"
+		;;
+esac
+
+command_exists() {
+	command -v "$@" > /dev/null 2>&1
+}
+
+# version_gte checks if the version specified in $VERSION is at least
+# the given CalVer (YY.MM) version. returns 0 (success) if $VERSION is either
+# unset (=latest) or newer or equal than the specified version. Returns 1 (fail)
+# otherwise.
+#
+# examples:
+#
+# VERSION=20.10
+# version_gte 20.10 // 0 (success)
+# version_gte 19.03 // 0 (success)
+# version_gte 21.10 // 1 (fail)
+version_gte() {
+	if [ -z "$VERSION" ]; then
+			return 0
+	fi
+	eval calver_compare "$VERSION" "$1"
+}
+
+# calver_compare compares two CalVer (YY.MM) version strings. returns 0 (success)
+# if version A is newer or equal than version B, or 1 (fail) otherwise. Patch
+# releases and pre-release (-alpha/-beta) are not taken into account
+#
+# examples:
+#
+# calver_compare 20.10 19.03 // 0 (success)
+# calver_compare 20.10 20.10 // 0 (success)
+# calver_compare 19.03 20.10 // 1 (fail)
+calver_compare() (
+	set +x
+
+	yy_a="$(echo "$1" | cut -d'.' -f1)"
+	yy_b="$(echo "$2" | cut -d'.' -f1)"
+	if [ "$yy_a" -lt "$yy_b" ]; then
+		return 1
+	fi
+	if [ "$yy_a" -gt "$yy_b" ]; then
+		return 0
+	fi
+	mm_a="$(echo "$1" | cut -d'.' -f2)"
+	mm_b="$(echo "$2" | cut -d'.' -f2)"
+	if [ "${mm_a#0}" -lt "${mm_b#0}" ]; then
+		return 1
+	fi
+
+	return 0
+)
+
+is_dry_run() {
+	if [ -z "$DRY_RUN" ]; then
+		return 1
+	else
+		return 0
+	fi
+}
+
+is_wsl() {
+	case "$(uname -r)" in
+	*microsoft* ) true ;; # WSL 2
+	*Microsoft* ) true ;; # WSL 1
+	* ) false;;
+	esac
+}
+
+is_darwin() {
+	case "$(uname -s)" in
+	*darwin* ) true ;;
+	*Darwin* ) true ;;
+	* ) false;;
+	esac
+}
+
+deprecation_notice() {
+	distro=$1
+	distro_version=$2
+	echo
+	printf "\033[91;1mDEPRECATION WARNING\033[0m\n"
+	printf "    This Linux distribution (\033[1m%s %s\033[0m) reached end-of-life and is no longer supported by this script.\n" "$distro" "$distro_version"
+	echo   "    No updates or security fixes will be released for this distribution, and users are recommended"
+	echo   "    to upgrade to a currently maintained version of $distro."
+	echo
+	printf   "Press \033[1mCtrl+C\033[0m now to abort this script, or wait for the installation to continue."
+	echo
+	sleep 10
+}
+
+get_distribution() {
+	lsb_dist=""
+	# Every system that we officially support has /etc/os-release
+	if [ -r /etc/os-release ]; then
+		lsb_dist="$(. /etc/os-release && echo "$ID")"
+	fi
+	# Returning an empty string here should be alright since the
+	# case statements don't act unless you provide an actual value
+	echo "$lsb_dist"
+}
+
+echo_docker_as_nonroot() {
+	if is_dry_run; then
+		return
+	fi
+	if command_exists docker && [ -e /var/run/docker.sock ]; then
+		(
+			set -x
+			$sh_c 'docker version'
+		) || true
+	fi
+
+	# intentionally mixed spaces and tabs here -- tabs are stripped b
