@@ -4,7 +4,6 @@ if（isRequest ）{
 
  GetCookie()
 }else{
-$message.success('一条来自脚本的消息')
 }
 function GetCookie() {
   const req = $request;
@@ -14,7 +13,6 @@ function GetCookie() {
     if (ckItems && ckItems.length == 2) {
 		$store.delete('qqjd') 
 		$store.set('qqjd',  ckItems.join('')) 
-$message.success(ckItems.join(''))
 		
 	}
   }
